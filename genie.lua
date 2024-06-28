@@ -1,4 +1,4 @@
-project "myplugin"
+project "livecode"
 	libType()
 	files { 
 		"src/**.c",
@@ -6,9 +6,9 @@ project "myplugin"
 		"src/**.h",
 		"genie.lua"
 	}
-	defines { "BUILDING_MYPLUGIN" }
+	defines { "BUILDING_LIVECODE" }
 	links { "engine" }
 	useLua()
 	defaultConfigurations()
 
-linkPlugin("myplugin")
+linkPlugin("livecode")
