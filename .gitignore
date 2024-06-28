@@ -31,3 +31,4 @@
 tmp/
 projects/tmp
 !projects/genie.exe
+!external/blink/blink.exe
