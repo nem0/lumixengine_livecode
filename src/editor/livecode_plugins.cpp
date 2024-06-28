@@ -49,7 +49,7 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 	void onGUI() override {
 		if (!m_is_open) return;
 		ImGui::SetNextWindowSize(ImVec2(200, 200), ImGuiCond_FirstUseEver);
-		if (ImGui::Begin("LiveCode")) {
+		if (ImGui::Begin("LiveCode", &m_is_open)) {
 			if (m_is_running) {
 				ImGui::Text("Running");
 			}
