@@ -16,6 +16,7 @@
 #include "core/thread.h"
 #include "core/path.h"
 #include "editor/file_system_watcher.h"
+#include "editor/settings.h"
 #include "editor/studio_app.h"
 #include "editor/utils.h"
 #include "editor/world_editor.h"
@@ -86,6 +87,18 @@ struct thread_scope_guard : scoped_handle
 };
 
 struct EditorPlugin : StudioApp::GUIPlugin {
+	struct SourceFile {
+		SourceFile(IAllocator& allocator) : path(allocator), project(allocator) {}
+		String path;
+		String project;
+	};
+
+	struct FileTab {
+		FileTab(IAllocator& allocator) : src_file(allocator) {}
+		UniquePtr<CodeEditor> editor;
+		SourceFile src_file;
+	};
+
 	bool init() {
 		// based on blink
 		MODULEINFO module_info;
@@ -127,19 +140,7 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 		m_symbols.insert({ "__ImageBase", m_image_base });
 		pdb.read_symbol_table(m_image_base, m_symbols);
 		
-		std::vector<std::vector<std::filesystem::path>> source_files;
-		std::unordered_map<std::filesystem::path, blink::source_file_indices, blink::path_hash, blink::path_comp> source_file_map;
-		pdb.read_source_files(source_files, source_file_map);
-
-		for (auto& paths : source_files) {
-			for (auto& path : paths) {
-				std::string str = path.generic_u8string();
-				if (str.find("Program Files") != std::string::npos) continue;
-				if (m_source_files.find([&](const String& s) { return equalStrings(s.c_str(), str.c_str()); }) >= 0) continue;
-
-				m_source_files.push(String(str.c_str(), m_app.getAllocator()));
-			}
-		}
+		parseProjectFiles();
 
 		char exe_path[MAX_PATH];
 		os::getExecutablePath(Span(exe_path));
@@ -149,6 +150,52 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 		m_watcher->getCallback().bind<&EditorPlugin::onFileChanged>(this);
 
 		return true;
+	}
+
+	void parseProjectFile(const char* path) {
+		os::InputFile file;
+		if (!file.open(path)) {
+			logError("Failed to open ", path);
+			return;
+		}
+		OutputMemoryStream blob(m_app.getAllocator());
+		blob.resize(file.size() + 1);
+		if (!file.read(blob.getMutableData(), blob.size() - 1)) {
+			file.close();
+			logError("Failed to read ", path);
+			return;
+		}
+		file.close();
+		blob.getMutableData()[blob.size() - 1] = 0;
+		const char* content = (const char*)blob.data();
+		
+		const char* iter = content;
+		for (;;) {
+			iter = strstr(iter, "<ClCompile Include=");
+			if (!iter) break;
+			StringView src_path(iter + 20, u32(0));
+			while (*src_path.end != '"' && *src_path.end != '\0') ++src_path.end;
+			SourceFile& f = m_source_files.emplace(m_app.getAllocator());
+			f.path = src_path;
+			f.project = Path::getBasename(path);
+			++iter;
+		}
+	}
+
+	void parseProjectFiles() {
+		char exe_path[MAX_PATH];
+		os::getExecutablePath(Span(exe_path));
+		StringView dir = Path::getDir(Path::getDir(Path::getDir(exe_path)));
+		m_sln_dir = dir;
+		os::FileIterator* iter = os::createFileIterator(dir, m_app.getAllocator());
+		os::FileInfo info;
+		while (os::getNextFile(iter, &info)) {
+			if (Path::hasExtension(info.filename, "vcxproj")) {
+				StaticString<MAX_PATH> tmp(dir, info.filename);
+				parseProjectFile(tmp);
+			}
+		}
+		os::destroyFileIterator(iter);
 	}
 
 	void onFileChanged(const char* path) {
@@ -432,6 +479,7 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 	// from blink
 	bool link(const std::filesystem::path& path)
 	{
+		logInfo("Relinking ", path.u8string().c_str());
 		// Object file can be a normal COFF or an extended COFF
 		COFF_HEADER header;
 		const scoped_handle file = open_coff_file(path, header);
@@ -461,6 +509,7 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 	EditorPlugin(StudioApp& app) 
 		: m_app(app)
 		, m_source_files(app.getAllocator())
+		, m_tabs(app.getAllocator())
 	{
 		if (!init()) {
 			logError("Failed to init LiveCode plugin");
@@ -471,14 +520,39 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 		m_toggle_ui.func.bind<&EditorPlugin::toggleUI>(this);
 		m_toggle_ui.is_selected.bind<&EditorPlugin::isOpen>(this);
 		m_app.addWindowAction(&m_toggle_ui);
-		m_editor = createCppCodeEditor(m_app);
-		m_editor->setText("");
 	}
 
 	~EditorPlugin() { m_app.removeAction(&m_toggle_ui); }
 
 	bool isOpen() const { return m_is_open; }
 	void toggleUI() { m_is_open = !m_is_open; }
+
+	void openTab(const SourceFile& src_file) {
+		if (m_tabs.find([&](const FileTab& t){ return t.src_file.path == src_file.path; }) >= 0) return;
+		os::InputFile file;
+
+		StaticString<MAX_PATH> full_path(m_sln_dir, src_file.path);
+
+		if (!file.open(full_path)) {
+			logError("Failed to open ", src_file.path);
+			return;
+		}
+
+		Array<char> content(m_app.getAllocator());
+		content.resize((u32)file.size() + 1);
+		if (!file.read(content.begin(), content.size() - 1)) {
+			logError("Failed to read ", src_file.path);
+			file.close();
+			return;
+		}
+		file.close();
+
+		FileTab& tab = m_tabs.emplace(m_app.getAllocator());
+		tab.src_file = src_file;
+		tab.editor = createCppCodeEditor(m_app);
+		content.back() = 0;
+		tab.editor->setText(content.data());
+	}
 
 	void onGUI() override {
 		if (!m_is_open) return;
@@ -488,32 +562,68 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 			static TextFilter filter;
 			filter.gui("Filter");
 			ImGui::BeginChild("left_col");
-			for (const String& path : m_source_files) {
-				if (filter.pass(path)) {
-					if (ImGui::Selectable(path.c_str())) {
-						os::InputFile file;
-						if (file.open(path.c_str())) {
-							Array<char> content(m_app.getAllocator());
-							content.resize((u32)file.size() + 1);
-							(void)file.read(content.begin(), content.size() - 1);
-							file.close();
-							content.back() = 0;
-							m_editor->setText(content.data());
-						}
+			for (const SourceFile& source_file: m_source_files) {
+				if (filter.pass(source_file.path)) {
+					StringView basename = Path::getBasename(source_file.path);
+					if (ImGui::Selectable(basename.begin, false, ImGuiSelectableFlags_AllowDoubleClick) && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+						openTab(source_file);
 					}
 				}
 			}
 			ImGui::EndChild();
 			ImGui::NextColumn();
-			ImGui::Button("Build");
-			ImGui::PushFont(m_app.getMonospaceFont());
-			m_editor->gui("live_code_editor");
-			ImGui::PopFont();
+			if (ImGui::BeginTabBar("tabbar")) {
+				for (FileTab& tab : m_tabs) {
+					StringView basename = Path::getBasename(tab.src_file.path.c_str());
+					bool open = true;
+					if (ImGui::BeginTabItem(basename.begin, &open)) {
+						if (ImGui::Button("Save & Build")) {
+							os::OutputFile file;
+							StaticString<MAX_PATH> full_path(m_sln_dir, tab.src_file.path);
+							if (file.open(full_path)) {
+								OutputMemoryStream blob(m_app.getAllocator());
+								tab.editor->serializeText(blob);
+								if (!file.write(blob.data(), blob.size())) {
+									logError("Failed to write", tab.src_file.path);
+								}
+								file.close();
+								String args("/t:ClCompile /p:Configuration=Debug /p:Platform=x64 ", m_app.getAllocator());
+								args.append("/p:SelectedFiles=");
+								args.append(tab.src_file.path);
+								args.append(" ");
+								args.append(tab.src_file.project);
+								args.append(".vcxproj");
+								os::shellExecuteOpen("C:/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/amd64/msbuild.exe", args.c_str(), m_sln_dir, false);
+							}
+							else {
+								logError("Failed to open ", tab.src_file.path);
+							}
+						}
+						ImGui::PushFont(m_app.getMonospaceFont());
+						tab.editor->gui("live_code_editor");
+						ImGui::PopFont();
+						ImGui::EndTabItem();
+					}
+					if (!open) {
+						m_tabs.erase(u32(&tab - m_tabs.begin()));
+						break;
+					}
+				}
+				ImGui::EndTabBar();
+			}
 			ImGui::Columns();
 		}
 		ImGui::End();
 	}
-	
+
+	void onSettingsLoaded() override {
+		m_is_open = m_app.getSettings().getValue(Settings::LOCAL, "is_livecode_open", false);
+	}
+
+	void onBeforeSettingsSaved() override {
+		m_app.getSettings().setValue(Settings::LOCAL, "is_livecode_open", m_is_open);
+	}
+
 	const char* getName() const override { return "livecode"; }
 
 	StudioApp& m_app;
@@ -525,8 +635,9 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 	std::unordered_map<std::string, void*> m_symbols;
 	UniquePtr<FileSystemWatcher> m_watcher;
 	StaticString<MAX_PATH> m_objs_path;
-	Array<String> m_source_files;
-	UniquePtr<CodeEditor> m_editor;
+	StaticString<MAX_PATH> m_sln_dir;
+	Array<SourceFile> m_source_files;
+	Array<FileTab> m_tabs;
 };
 
 
