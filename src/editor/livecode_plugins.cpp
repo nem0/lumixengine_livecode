@@ -520,6 +520,7 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 		m_toggle_ui.func.bind<&EditorPlugin::toggleUI>(this);
 		m_toggle_ui.is_selected.bind<&EditorPlugin::isOpen>(this);
 		m_app.addWindowAction(&m_toggle_ui);
+		m_app.getSettings().registerPtr("is_livecode_open", &m_is_open);
 	}
 
 	~EditorPlugin() { m_app.removeAction(&m_toggle_ui); }
@@ -614,14 +615,6 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 			ImGui::Columns();
 		}
 		ImGui::End();
-	}
-
-	void onSettingsLoaded() override {
-		m_is_open = m_app.getSettings().getValue(Settings::LOCAL, "is_livecode_open", false);
-	}
-
-	void onBeforeSettingsSaved() override {
-		m_app.getSettings().setValue(Settings::LOCAL, "is_livecode_open", m_is_open);
 	}
 
 	const char* getName() const override { return "livecode"; }
