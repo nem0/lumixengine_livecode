@@ -11,7 +11,6 @@ project "livecode"
 	excludes { "external/blink/src/main.cpp" }
 	defines { "BUILDING_LIVECODE" }
 	links { "engine" }
-	useLua()
 	defaultConfigurations()
 
 linkPlugin("livecode")
