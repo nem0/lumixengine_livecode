@@ -516,16 +516,8 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 			return;
 		}
 
-		m_toggle_ui.init("LiveCode", "Toggle LiveCode UI", "livecode", "", Action::IMGUI_PRIORITY);
-		m_toggle_ui.func.bind<&EditorPlugin::toggleUI>(this);
-		m_toggle_ui.is_selected.bind<&EditorPlugin::isOpen>(this);
-		m_app.addWindowAction(&m_toggle_ui);
+		m_app.getSettings().registerOption("livecode_opend", &m_is_open);
 	}
-
-	~EditorPlugin() { m_app.removeAction(&m_toggle_ui); }
-
-	bool isOpen() const { return m_is_open; }
-	void toggleUI() { m_is_open = !m_is_open; }
 
 	void openTab(const SourceFile& src_file) {
 		if (m_tabs.find([&](const FileTab& t){ return t.src_file.path == src_file.path; }) >= 0) return;
@@ -555,6 +547,7 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 	}
 
 	void onGUI() override {
+		if (m_app.checkShortcut(m_toggle_ui, true)) m_is_open = !m_is_open;
 		if (!m_is_open) return;
 		ImGui::SetNextWindowSize(ImVec2(200, 200), ImGuiCond_FirstUseEver);
 		if (ImGui::Begin("LiveCode", &m_is_open)) {
@@ -616,18 +609,10 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 		ImGui::End();
 	}
 
-	void onSettingsLoaded() override {
-		m_is_open = m_app.getSettings().getValue(Settings::LOCAL, "is_livecode_open", false);
-	}
-
-	void onBeforeSettingsSaved() override {
-		m_app.getSettings().setValue(Settings::LOCAL, "is_livecode_open", m_is_open);
-	}
-
 	const char* getName() const override { return "livecode"; }
 
 	StudioApp& m_app;
-	Action m_toggle_ui;
+	Action m_toggle_ui{"LiveCode", "Livecode - toggle UI", "livecode_toggle_ui", nullptr, Action::WINDOW};
 	bool m_is_open = false;
 
 	BYTE* m_image_base;
