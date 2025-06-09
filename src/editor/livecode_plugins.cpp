@@ -15,6 +15,7 @@
 #include "core/os.h"
 #include "core/thread.h"
 #include "core/path.h"
+#include "core/sync.h"
 #include "editor/file_system_watcher.h"
 #include "editor/settings.h"
 #include "editor/studio_app.h"
@@ -91,6 +92,7 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 		SourceFile(IAllocator& allocator) : path(allocator), project(allocator) {}
 		String path;
 		String project;
+		u64 modified_timestamp;
 	};
 
 	struct FileTab {
@@ -178,6 +180,8 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 			SourceFile& f = m_source_files.emplace(m_app.getAllocator());
 			f.path = src_path;
 			f.project = Path::getBasename(path);
+			StaticString<MAX_PATH> full_path(m_sln_dir, src_path);
+			f.modified_timestamp = os::getLastModified(full_path);
 			++iter;
 		}
 	}
@@ -201,7 +205,10 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 	void onFileChanged(const char* path) {
 		if (!Path::hasExtension(path, "obj")) return;
 		StaticString<MAX_PATH> full_path(m_objs_path, "/", path);
-		link(full_path.data);
+		
+		MutexGuard guard(m_to_reload_mutex);
+		m_to_reload.emplace(full_path, m_app.getAllocator());
+		m_to_reload_timeout = 0.1f;
 	}
 
 	// from blink
@@ -235,6 +242,7 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 	template <typename SYMBOL_TYPE, typename HEADER_TYPE>
 	bool link(HANDLE file, const HEADER_TYPE& header) {
 		thread_scope_guard _scope_guard_;
+		os::Timer timer;
 
 		if (header.Machine != IMAGE_FILE_MACHINE_AMD64) {
 			logError("Input file is not of a valid format or was compiled for a different processor architecture.");
@@ -471,7 +479,8 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 
 		FlushInstructionCache(GetCurrentProcess(), module_base, allocated_module_size);
 
-		logInfo("Successfully linked object file into executable image.");
+		logInfo(image_function_relocations.size(), " functions were rerouted to new code.");
+		logInfo("Successfully linked object file into executable image in ", timer.getTimeSinceStart(), " seconds.");
 
 		return true;
 	}
@@ -510,6 +519,7 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 		: m_app(app)
 		, m_source_files(app.getAllocator())
 		, m_tabs(app.getAllocator())
+		, m_to_reload(app.getAllocator())
 	{
 		if (!init()) {
 			logError("Failed to init LiveCode plugin");
@@ -546,7 +556,50 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 		tab.editor->setText(content.data());
 	}
 
+	void buildModifiedSource() {
+		// check all m_source_files for modified timestamps
+		for (SourceFile& source_file : m_source_files) {
+			StaticString<MAX_PATH> full_path(m_sln_dir, source_file.path);
+			u64 modified_timestamp = os::getLastModified(full_path);
+			if (modified_timestamp == 0) {
+				logError("Failed to get last modified time for ", source_file.path);
+				continue;
+			}
+			if (modified_timestamp > source_file.modified_timestamp) {
+				source_file.modified_timestamp = modified_timestamp;
+				os::Timer timer;
+				logInfo("Building modified source file ", source_file.path, " ...");
+				
+				String args("/t:ClCompile /p:Configuration=Debug /p:Platform=x64 ", m_app.getAllocator());
+				args.append("/p:SelectedFiles=");
+				args.append(source_file.path);
+				args.append(" ");
+				args.append(source_file.project);
+				args.append(".vcxproj");
+				os::shellExecuteOpen("C:/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/amd64/msbuild.exe", args.c_str(), m_sln_dir, false);
+
+				logInfo("Built in ", timer.getTimeSinceStart(), " seconds.");
+			}
+		}
+	}
+
+	void update(float td) override {
+		MutexGuard guard(m_to_reload_mutex);
+		
+		if (m_to_reload.empty()) return;
+		
+		m_to_reload_timeout -= td;
+		if (m_to_reload_timeout > 0) return;
+
+		for (const String& path : m_to_reload) {
+			link(path.c_str());
+		}
+
+		m_to_reload.clear();
+	}
+
 	void onGUI() override {
+		if (m_app.checkShortcut(m_build, true)) buildModifiedSource();
 		if (m_app.checkShortcut(m_toggle_ui, true)) m_is_open = !m_is_open;
 		if (!m_is_open) return;
 		ImGui::SetNextWindowSize(ImVec2(200, 200), ImGuiCond_FirstUseEver);
@@ -613,6 +666,7 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 
 	StudioApp& m_app;
 	Action m_toggle_ui{"LiveCode", "Livecode - toggle UI", "livecode_toggle_ui", nullptr, Action::WINDOW};
+	Action m_build{"Build source", "Livecode - build source", "livecode_build", nullptr, Action::NORMAL};
 	bool m_is_open = false;
 
 	BYTE* m_image_base;
@@ -621,6 +675,9 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 	UniquePtr<FileSystemWatcher> m_watcher;
 	StaticString<MAX_PATH> m_objs_path;
 	StaticString<MAX_PATH> m_sln_dir;
+	Mutex m_to_reload_mutex;
+	Array<String> m_to_reload;
+	float m_to_reload_timeout = -1;
 	Array<SourceFile> m_source_files;
 	Array<FileTab> m_tabs;
 };
