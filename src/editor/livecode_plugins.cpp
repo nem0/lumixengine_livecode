@@ -102,9 +102,25 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 	};
 
 	bool init() {
+		// Try to find msbuild.exe in common locations
+		const char* msbuild_candidates[] = {
+			"C:/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/amd64/msbuild.exe",
+			"C:/Program Files (x86)/Microsoft Visual Studio/2019/Community/MSBuild/Current/Bin/amd64/msbuild.exe",
+			"C:/Program Files/Microsoft Visual Studio/2022/Professional/MSBuild/Current/Bin/amd64/msbuild.exe",
+			"C:/Program Files/Microsoft Visual Studio/2022/Enterprise/MSBuild/Current/Bin/amd64/msbuild.exe"
+		};
+		for (const char* candidate : msbuild_candidates) {
+			if (os::fileExists(candidate)) {
+				m_msbuild_path = candidate;
+				break;
+			}
+		}
+		if (m_msbuild_path.length() == 0) logWarning("Could not find msbuild.exe.");
+		
 		// based on blink
 		MODULEINFO module_info;
 		if (!GetModuleInformation(GetCurrentProcess(), GetModuleHandle(nullptr), &module_info, sizeof(module_info))) {
+			logError("Could not get module information.");
 			return false;
 		}
 
@@ -117,8 +133,7 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 			char path[1];
 		} const* debug_data = nullptr;
 
-		const auto headers = reinterpret_cast<const IMAGE_NT_HEADERS*>(
-			m_image_base + reinterpret_cast<const IMAGE_DOS_HEADER*>(m_image_base)->e_lfanew);
+		const auto headers = reinterpret_cast<const IMAGE_NT_HEADERS*>(m_image_base + reinterpret_cast<const IMAGE_DOS_HEADER*>(m_image_base)->e_lfanew);
 
 		const IMAGE_DATA_DIRECTORY& debug_directory = headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG];
 		const auto debug_directory_entries = reinterpret_cast<const IMAGE_DEBUG_DIRECTORY*>(
@@ -131,17 +146,22 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 			}
 		}
 
-		if (debug_data == nullptr) return false;
+		if (debug_data == nullptr) {
+			logError("No debug data found.");
+			return false;
+		}
 
 		blink::pdb_reader pdb(debug_data->path);
-		if (pdb.guid() != debug_data->guid)
+		if (pdb.guid() != debug_data->guid) {
+			logError("Debug data mismatch.");
 			return false;
+		}
 
 		logInfo("Found PDB: ", debug_data->path);
 		pdb.read_object_files(m_object_files);
 		m_symbols.insert({ "__ImageBase", m_image_base });
 		pdb.read_symbol_table(m_image_base, m_symbols);
-		
+
 		parseProjectFiles();
 
 		char exe_path[MAX_PATH];
@@ -186,6 +206,8 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 		}
 	}
 
+	// we read VS projects files because we need to map cpp files to projects to compile them
+	// this is (probably?) not possible in pdb
 	void parseProjectFiles() {
 		char exe_path[MAX_PATH];
 		os::getExecutablePath(Span(exe_path));
@@ -501,8 +523,9 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 
 	// from blink
 	static void write_jump(uint8_t* address, const uint8_t* jump_target) {
-		DWORD protect = PAGE_READWRITE;
+		DWORD protect = PAGE_EXECUTE_READWRITE;
 		BOOL res = VirtualProtect(address, 12, protect, &protect);
+		ASSERT(res);
 
 		// MOV RAX, [target_address]
 		// JMP RAX
@@ -520,6 +543,7 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 		, m_source_files(app.getAllocator())
 		, m_tabs(app.getAllocator())
 		, m_to_reload(app.getAllocator())
+		, m_msbuild_path(app.getAllocator())
 	{
 		if (!init()) {
 			logError("Failed to init LiveCode plugin");
@@ -557,6 +581,11 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 	}
 
 	void buildModifiedSource() {
+		if (m_msbuild_path.length() == 0) {
+			logError("msbuild.exe not found.");
+			return;
+		}
+
 		// check all m_source_files for modified timestamps
 		for (SourceFile& source_file : m_source_files) {
 			StaticString<MAX_PATH> full_path(m_sln_dir, source_file.path);
@@ -576,7 +605,7 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 				args.append(" ");
 				args.append(source_file.project);
 				args.append(".vcxproj");
-				os::shellExecuteOpen("C:/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/amd64/msbuild.exe", args.c_str(), m_sln_dir, false);
+				os::shellExecuteOpen(m_msbuild_path, args.c_str(), m_sln_dir, false);
 
 				logInfo("Built in ", timer.getTimeSinceStart(), " seconds.");
 			}
@@ -602,8 +631,13 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 		if (m_app.checkShortcut(m_build, true)) buildModifiedSource();
 		if (m_app.checkShortcut(m_toggle_ui, true)) m_is_open = !m_is_open;
 		if (!m_is_open) return;
+		
 		ImGui::SetNextWindowSize(ImVec2(200, 200), ImGuiCond_FirstUseEver);
+		bool save_request = false;
 		if (ImGui::Begin("LiveCode", &m_is_open)) {
+			if (m_app.getCommonActions().save.iconButton()) save_request = true;
+			ImGui::SameLine();
+			if (m_build.iconButton()) buildModifiedSource();
 			ImGui::Columns(2);
 			static TextFilter filter;
 			filter.gui("Filter");
@@ -623,7 +657,7 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 					StringView basename = Path::getBasename(tab.src_file.path.c_str());
 					bool open = true;
 					if (ImGui::BeginTabItem(basename.begin, &open)) {
-						if (ImGui::Button("Save & Build")) {
+						if (save_request) {
 							os::OutputFile file;
 							StaticString<MAX_PATH> full_path(m_sln_dir, tab.src_file.path);
 							if (file.open(full_path)) {
@@ -633,13 +667,6 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 									logError("Failed to write", tab.src_file.path);
 								}
 								file.close();
-								String args("/t:ClCompile /p:Configuration=Debug /p:Platform=x64 ", m_app.getAllocator());
-								args.append("/p:SelectedFiles=");
-								args.append(tab.src_file.path);
-								args.append(" ");
-								args.append(tab.src_file.project);
-								args.append(".vcxproj");
-								os::shellExecuteOpen("C:/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/amd64/msbuild.exe", args.c_str(), m_sln_dir, false);
 							}
 							else {
 								logError("Failed to open ", tab.src_file.path);
@@ -666,7 +693,7 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 
 	StudioApp& m_app;
 	Action m_toggle_ui{"LiveCode", "Livecode - toggle UI", "livecode_toggle_ui", nullptr, Action::WINDOW};
-	Action m_build{"Build source", "Livecode - build source", "livecode_build", nullptr, Action::NORMAL};
+	Action m_build{"Rebuild modified sources", "Livecode - rebuild modified sources", "livecode_build", ICON_FA_RECYCLE, Action::NORMAL};
 	bool m_is_open = false;
 
 	BYTE* m_image_base;
@@ -680,6 +707,7 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 	float m_to_reload_timeout = -1;
 	Array<SourceFile> m_source_files;
 	Array<FileTab> m_tabs;
+	String m_msbuild_path;
 };
 
 
