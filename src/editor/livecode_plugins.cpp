@@ -21,6 +21,7 @@
 #include "editor/studio_app.h"
 #include "editor/utils.h"
 #include "editor/world_editor.h"
+#include "engine/component_uid.h"
 
 #include "../../external/blink/src/coff_reader.hpp"
 #include "../../external/blink/src/pdb_reader.hpp"
@@ -87,7 +88,7 @@ struct thread_scope_guard : scoped_handle
 	HANDLE handle;
 };
 
-struct EditorPlugin : StudioApp::GUIPlugin {
+struct EditorPlugin : StudioApp::IPlugin, StudioApp::GUIPlugin {
 	struct SourceFile {
 		SourceFile(IAllocator& allocator) : path(allocator), project(allocator) {}
 		String path;
@@ -101,7 +102,9 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 		SourceFile src_file;
 	};
 
-	bool init() {
+	bool showGizmo(WorldView& view, ComponentUID) override { return false; }
+
+	void init() override {
 		// Try to find msbuild.exe in common locations
 		const char* msbuild_candidates[] = {
 			"C:/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/amd64/msbuild.exe",
@@ -121,7 +124,7 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 		MODULEINFO module_info;
 		if (!GetModuleInformation(GetCurrentProcess(), GetModuleHandle(nullptr), &module_info, sizeof(module_info))) {
 			logError("Could not get module information.");
-			return false;
+			return;
 		}
 
 		m_image_base = (BYTE*)module_info.lpBaseOfDll;
@@ -148,13 +151,13 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 
 		if (debug_data == nullptr) {
 			logError("No debug data found.");
-			return false;
+			return;
 		}
 
 		blink::pdb_reader pdb(debug_data->path);
 		if (pdb.guid() != debug_data->guid) {
 			logError("Debug data mismatch.");
-			return false;
+			return;
 		}
 
 		logInfo("Found PDB: ", debug_data->path);
@@ -170,8 +173,6 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 		m_objs_path.append("obj");
 		m_watcher = FileSystemWatcher::create(m_objs_path, m_app.getAllocator());
 		m_watcher->getCallback().bind<&EditorPlugin::onFileChanged>(this);
-
-		return true;
 	}
 
 	void parseProjectFile(const char* path) {
@@ -545,11 +546,6 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 		, m_to_reload(app.getAllocator())
 		, m_msbuild_path(app.getAllocator())
 	{
-		if (!init()) {
-			logError("Failed to init LiveCode plugin");
-			return;
-		}
-
 		m_app.getSettings().registerOption("livecode_opend", &m_is_open);
 	}
 
@@ -711,11 +707,8 @@ struct EditorPlugin : StudioApp::GUIPlugin {
 };
 
 
-LUMIX_STUDIO_ENTRY(livecode)
-{
-	WorldEditor& editor = app.getWorldEditor();
-
-	auto* plugin = LUMIX_NEW(editor.getAllocator(), EditorPlugin)(app);
-	app.addPlugin(*plugin);
-	return nullptr;
+LUMIX_STUDIO_ENTRY(livecode) {
+	auto* plugin = LUMIX_NEW(app.getAllocator(), EditorPlugin)(app);
+	app.addPlugin((StudioApp::GUIPlugin&)*plugin);
+	return plugin;
 }
