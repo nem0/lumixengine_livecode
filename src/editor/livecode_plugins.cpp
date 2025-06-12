@@ -15,6 +15,7 @@
 #include "core/os.h"
 #include "core/thread.h"
 #include "core/path.h"
+#include "core/profiler.h"
 #include "core/sync.h"
 #include "editor/file_system_watcher.h"
 #include "editor/settings.h"
@@ -88,7 +89,7 @@ struct thread_scope_guard : scoped_handle
 	HANDLE handle;
 };
 
-struct EditorPlugin : StudioApp::IPlugin, StudioApp::GUIPlugin {
+struct LiveCodeEditorPlugin : StudioApp::IPlugin, StudioApp::GUIPlugin {
 	struct SourceFile {
 		SourceFile(IAllocator& allocator) : path(allocator), project(allocator) {}
 		String path;
@@ -105,6 +106,7 @@ struct EditorPlugin : StudioApp::IPlugin, StudioApp::GUIPlugin {
 	bool showGizmo(WorldView& view, ComponentUID) override { return false; }
 
 	void init() override {
+		PROFILE_FUNCTION();
 		// Try to find msbuild.exe in common locations
 		const char* msbuild_candidates[] = {
 			"C:/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/amd64/msbuild.exe",
@@ -172,7 +174,7 @@ struct EditorPlugin : StudioApp::IPlugin, StudioApp::GUIPlugin {
 		m_objs_path = Path::getDir(Path::getDir(Path::getDir(exe_path)));
 		m_objs_path.append("obj");
 		m_watcher = FileSystemWatcher::create(m_objs_path, m_app.getAllocator());
-		m_watcher->getCallback().bind<&EditorPlugin::onFileChanged>(this);
+		m_watcher->getCallback().bind<&LiveCodeEditorPlugin::onFileChanged>(this);
 	}
 
 	void parseProjectFile(const char* path) {
@@ -539,7 +541,7 @@ struct EditorPlugin : StudioApp::IPlugin, StudioApp::GUIPlugin {
 		VirtualProtect(address, 12, protect, &protect);
 	}
 
-	EditorPlugin(StudioApp& app) 
+	LiveCodeEditorPlugin(StudioApp& app) 
 		: m_app(app)
 		, m_source_files(app.getAllocator())
 		, m_tabs(app.getAllocator())
@@ -708,7 +710,7 @@ struct EditorPlugin : StudioApp::IPlugin, StudioApp::GUIPlugin {
 
 
 LUMIX_STUDIO_ENTRY(livecode) {
-	auto* plugin = LUMIX_NEW(app.getAllocator(), EditorPlugin)(app);
+	auto* plugin = LUMIX_NEW(app.getAllocator(), LiveCodeEditorPlugin)(app);
 	app.addPlugin((StudioApp::GUIPlugin&)*plugin);
 	return plugin;
 }
