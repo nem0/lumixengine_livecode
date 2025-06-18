@@ -371,6 +371,7 @@ struct LiveCodeEditorPlugin : StudioApp::IPlugin, StudioApp::GUIPlugin {
 		std::vector<BYTE*> local_symbol_addresses(header.NumberOfSymbols);
 		std::vector<std::pair<BYTE*, const BYTE*>> image_function_relocations;
 
+		u32 num_new_functions = 0;
 		for (DWORD i = 0; i < header.NumberOfSymbols; i++) {
 			BYTE* target_address = nullptr;
 			const SYMBOL_TYPE& symbol = symbols[i];
@@ -439,6 +440,9 @@ struct LiveCodeEditorPlugin : StudioApp::IPlugin, StudioApp::GUIPlugin {
 							target_address = old_address;
 						}
 					}
+					else if (ISFCN(symbol.Type)) {
+						++num_new_functions;
+					}
 				}
 			}
 
@@ -505,6 +509,9 @@ struct LiveCodeEditorPlugin : StudioApp::IPlugin, StudioApp::GUIPlugin {
 		FlushInstructionCache(GetCurrentProcess(), module_base, allocated_module_size);
 
 		logInfo(image_function_relocations.size(), " functions were rerouted to new code.");
+		if (num_new_functions > 0) {
+			logInfo(num_new_functions, " new functions linked.");
+		}
 		logInfo("Successfully linked object file into executable image in ", timer.getTimeSinceStart(), " seconds.");
 
 		return true;
@@ -618,6 +625,7 @@ struct LiveCodeEditorPlugin : StudioApp::IPlugin, StudioApp::GUIPlugin {
 		m_to_reload_timeout -= td;
 		if (m_to_reload_timeout > 0) return;
 
+		m_to_reload.removeDuplicates();
 		for (const String& path : m_to_reload) {
 			link(path.c_str());
 		}
