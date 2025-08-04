@@ -698,8 +698,8 @@ struct LiveCodeEditorPlugin : StudioApp::IPlugin, StudioApp::GUIPlugin {
 	const char* getName() const override { return "livecode"; }
 
 	StudioApp& m_app;
-	Action m_toggle_ui{"LiveCode", "Livecode - toggle UI", "livecode_toggle_ui", nullptr, Action::WINDOW};
-	Action m_build{"Rebuild modified sources", "Livecode - rebuild modified sources", "livecode_build", ICON_FA_RECYCLE, Action::NORMAL};
+	Action m_toggle_ui{"LiveCode", "LiveCode", "Toggle UI", "livecode_toggle_ui", nullptr, Action::WINDOW};
+	Action m_build{"LiveCode", "Rebuild modified sources", "Rebuild modified sources", "livecode_build", ICON_FA_RECYCLE, Action::NORMAL};
 	bool m_is_open = false;
 
 	BYTE* m_image_base;
