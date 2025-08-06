@@ -1,5 +1,4 @@
-project "livecode"
-	libType()
+if plugin "livecode" then
 	files { 
 		"external/blink/src/**.h",
 		"external/blink/src/**.cpp",
@@ -10,7 +9,5 @@ project "livecode"
 	}
 	excludes { "external/blink/src/main.cpp" }
 	defines { "BUILDING_LIVECODE" }
-	links { "engine" }
-	defaultConfigurations()
-
-linkPlugin("livecode")
+	dynamic_link_plugin { "engine" }
+end

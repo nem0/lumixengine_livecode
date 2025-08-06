@@ -17,9 +17,11 @@
 #include "core/path.h"
 #include "core/profiler.h"
 #include "core/sync.h"
+#include "editor/action.h"
 #include "editor/file_system_watcher.h"
 #include "editor/settings.h"
 #include "editor/studio_app.h"
+#include "editor/text_filter.h"
 #include "editor/utils.h"
 #include "editor/world_editor.h"
 #include "engine/component_uid.h"
@@ -28,7 +30,7 @@
 #include "../../external/blink/src/pdb_reader.hpp"
 #include "../../external/blink/src/scoped_handle.hpp"
 
-#include "imgui/imgui.h"
+#include <imgui/imgui.h>
 #include <Windows.h>
 #include <Psapi.h>
 #include <TlHelp32.h>
