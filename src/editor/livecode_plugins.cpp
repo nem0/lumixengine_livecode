@@ -681,7 +681,7 @@ struct LiveCodeEditorPlugin : StudioApp::IPlugin, StudioApp::GUIPlugin {
 							}
 						}
 						ImGui::PushFont(m_app.getMonospaceFont());
-						tab.editor->gui("live_code_editor");
+						tab.editor->gui("live_code_editor", ImVec2(0, 0), m_app.getMonospaceFont(), m_app.getDefaultFont());
 						ImGui::PopFont();
 						ImGui::EndTabItem();
 					}
