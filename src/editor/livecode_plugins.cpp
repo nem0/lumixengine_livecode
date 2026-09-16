@@ -186,7 +186,7 @@ struct LiveCodeEditorPlugin : StudioApp::IPlugin, StudioApp::GUIPlugin {
 			iter = strstr(iter, "<ClCompile Include=");
 			if (!iter) break;
 			StringView src_path(iter + 20, u32(0));
-			while (*src_path.end != '"' && *src_path.end != '\0') ++src_path.end;
+			while (*src_path.end() != '"' && *src_path.end() != '\0') ++src_path.length;
 			SourceFile& f = m_source_files.emplace(m_app.getAllocator());
 			f.path = src_path;
 			f.project = Path::getBasename(path);
@@ -684,7 +684,7 @@ struct LiveCodeEditorPlugin : StudioApp::IPlugin, StudioApp::GUIPlugin {
 			for (const SourceFile& source_file: m_source_files) {
 				if (m_filter.pass(source_file.path)) {
 					StringView basename = Path::getBasename(source_file.path);
-					if (ImGui::Selectable(basename.begin, false, ImGuiSelectableFlags_AllowDoubleClick) && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+					if (ImGui::Selectable(basename.data, false, ImGuiSelectableFlags_AllowDoubleClick) && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
 						openTab(source_file);
 					}
 				}
@@ -695,7 +695,7 @@ struct LiveCodeEditorPlugin : StudioApp::IPlugin, StudioApp::GUIPlugin {
 				for (FileTab& tab : m_tabs) {
 					StringView basename = Path::getBasename(tab.src_file.path.c_str());
 					bool open = true;
-					if (ImGui::BeginTabItem(basename.begin, &open)) {
+					if (ImGui::BeginTabItem(basename.data, &open)) {
 						if (save_request) {
 							os::OutputFile file;
 							StaticString<MAX_PATH> full_path(m_sln_dir, tab.src_file.path);
